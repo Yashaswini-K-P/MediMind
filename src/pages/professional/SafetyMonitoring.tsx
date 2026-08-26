@@ -44,7 +44,12 @@ export default function ProfessionalSafetyReports() {
    */
 
   useEffect(() => {
-    if (!user) return;
+    if (!user?.id) {
+      setLoading(false);
+      setReports([]);
+      setPatients([]);
+      return;
+    }
 
     async function loadReports() {
       setLoading(true);
@@ -52,7 +57,12 @@ export default function ProfessionalSafetyReports() {
 
       try {
         /*
-         * Get active patient assignments for this professional.
+         * --------------------------------------------------------
+         * 1. GET ACTIVE PATIENT ASSIGNMENTS
+         * --------------------------------------------------------
+         *
+         * assignments.professional_id stores the authenticated
+         * Supabase user's ID.
          */
         const {
           data: assignments,
@@ -70,10 +80,14 @@ export default function ProfessionalSafetyReports() {
         const patientIds = (
           (assignments ?? []) as Assignment[]
         ).map(
-          (assignment) =>
-            assignment.patient_id
+          (assignment) => assignment.patient_id
         );
 
+        /*
+         * --------------------------------------------------------
+         * No assigned patients
+         * --------------------------------------------------------
+         */
         if (patientIds.length === 0) {
           setPatients([]);
           setReports([]);
@@ -82,7 +96,9 @@ export default function ProfessionalSafetyReports() {
         }
 
         /*
-         * Load patient details.
+         * --------------------------------------------------------
+         * 2. LOAD PATIENT DETAILS
+         * --------------------------------------------------------
          */
         const {
           data: patientData,
@@ -106,7 +122,9 @@ export default function ProfessionalSafetyReports() {
         );
 
         /*
-         * Load safety reports.
+         * --------------------------------------------------------
+         * 3. LOAD SAFETY REPORTS
+         * --------------------------------------------------------
          */
         const {
           data: reportData,
@@ -157,7 +175,7 @@ export default function ProfessionalSafetyReports() {
     }
 
     void loadReports();
-  }, [user]);
+  }, [user?.id]);
 
   /*
    * ============================================================
@@ -165,9 +183,7 @@ export default function ProfessionalSafetyReports() {
    * ============================================================
    */
 
-  const getPatient = (
-    patientId: string
-  ) => {
+  const getPatient = (patientId: string) => {
     return patients.find(
       (patient) =>
         patient.id === patientId
@@ -188,20 +204,18 @@ export default function ProfessionalSafetyReports() {
   }, [reports]);
 
   const openCount = useMemo(() => {
-    return reports.filter(
-      (report) => {
-        const status =
-          report.status
-            ?.trim()
-            .toLowerCase() || '';
+    return reports.filter((report) => {
+      const status =
+        report.status
+          ?.trim()
+          .toLowerCase() || '';
 
-        return (
-          status === 'needs review' ||
-          status === 'open' ||
-          status === 'under review'
-        );
-      }
-    ).length;
+      return (
+        status === 'needs review' ||
+        status === 'open' ||
+        status === 'under review'
+      );
+    }).length;
   }, [reports]);
 
   /*
@@ -210,9 +224,7 @@ export default function ProfessionalSafetyReports() {
    * ============================================================
    */
 
-  const formatDate = (
-    value: string
-  ) => {
+  const formatDate = (value: string) => {
     const date = new Date(value);
 
     if (Number.isNaN(date.getTime())) {
@@ -246,9 +258,7 @@ export default function ProfessionalSafetyReports() {
         ?.trim()
         .toLowerCase() || '';
 
-    if (
-      value === 'under review'
-    ) {
+    if (value === 'under review') {
       return 'psr-status-review';
     }
 
@@ -306,9 +316,7 @@ export default function ProfessionalSafetyReports() {
   if (loading) {
     return (
       <div className="psr-page">
-
         <div className="psr-loading-card">
-
           <div className="psr-loading-icon">
             ⚕
           </div>
@@ -318,11 +326,10 @@ export default function ProfessionalSafetyReports() {
           </strong>
 
           <span>
-            Retrieving reports from assigned patients...
+            Retrieving reports from assigned
+            patients...
           </span>
-
         </div>
-
       </div>
     );
   }
@@ -363,6 +370,7 @@ export default function ProfessionalSafetyReports() {
         </div>
 
         <div className="psr-clinical-badge">
+
           <span className="psr-clinical-icon">
             ⚕
           </span>
@@ -376,6 +384,7 @@ export default function ProfessionalSafetyReports() {
               Clinical review required
             </small>
           </div>
+
         </div>
 
       </section>
@@ -386,6 +395,7 @@ export default function ProfessionalSafetyReports() {
 
       {error && (
         <div className="psr-error">
+
           <strong>
             Unable to load safety reports
           </strong>
@@ -393,6 +403,7 @@ export default function ProfessionalSafetyReports() {
           <span>
             {error}
           </span>
+
         </div>
       )}
 
@@ -409,6 +420,7 @@ export default function ProfessionalSafetyReports() {
           </div>
 
           <div className="psr-summary-content">
+
             <strong>
               {reports.length}
             </strong>
@@ -416,6 +428,7 @@ export default function ProfessionalSafetyReports() {
             <span>
               Reports recorded
             </span>
+
           </div>
 
         </div>
@@ -427,6 +440,7 @@ export default function ProfessionalSafetyReports() {
           </div>
 
           <div className="psr-summary-content">
+
             <strong>
               {repeatedCount}
             </strong>
@@ -434,6 +448,7 @@ export default function ProfessionalSafetyReports() {
             <span>
               Repeated symptoms
             </span>
+
           </div>
 
         </div>
@@ -445,6 +460,7 @@ export default function ProfessionalSafetyReports() {
           </div>
 
           <div className="psr-summary-content">
+
             <strong>
               {openCount}
             </strong>
@@ -452,6 +468,7 @@ export default function ProfessionalSafetyReports() {
             <span>
               Open for review
             </span>
+
           </div>
 
         </div>
@@ -498,6 +515,7 @@ export default function ProfessionalSafetyReports() {
             </div>
 
             <div>
+
               <strong>
                 No safety reports
               </strong>
@@ -507,6 +525,7 @@ export default function ProfessionalSafetyReports() {
                 are currently available for
                 your assigned patients.
               </p>
+
             </div>
 
           </div>

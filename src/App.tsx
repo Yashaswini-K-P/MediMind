@@ -78,8 +78,7 @@ function AuthenticatedApp() {
   const [view, setView] = useState<View>('home');
 
   // ----------------------------------------------------------
-  // SELECTED PATIENT
-  // Used when a professional opens a patient from dashboard.
+  // SELECTED PROFESSIONAL PATIENT
   // ----------------------------------------------------------
 
   const [selectedPatientId, setSelectedPatientId] =
@@ -179,24 +178,42 @@ function AuthenticatedApp() {
 
   const go = (next: View) => {
     /*
-     * Clear a previously selected professional patient
-     * whenever the user changes the main page.
-     *
-     * Medication Monitoring and Symptoms & Safety have
-     * their own patient selectors.
+     * When navigating to another main page,
+     * clear the currently selected professional patient.
      */
     setSelectedPatientId(null);
     setView(next);
   };
 
   // ==========================================================
-  // OPEN PATIENT FROM PROFESSIONAL DASHBOARD
+  // OPEN PATIENT
   // ==========================================================
 
+  /*
+   * This function is kept because the professional
+   * patient-review page supports opening a specific patient.
+   *
+   * NOTE:
+   * The current ProfessionalDashboard component does not
+   * accept an onPatientOpen prop yet, so we do NOT pass this
+   * function into ProfessionalDashboard below.
+   *
+   * Once Dashboard.tsx is updated to accept:
+   *
+   * interface ProfessionalDashboardProps {
+   *   onPatientOpen?: (id: string) => void;
+   * }
+   *
+   * we can connect it here.
+   */
   const openPatient = (id: string) => {
     setSelectedPatientId(id);
     setView('professional');
   };
+
+  // Prevent TypeScript from treating this function as unused
+  // while the dashboard prop is not connected yet.
+  void openPatient;
 
   // ==========================================================
   // DISPLAY NAME
@@ -584,11 +601,7 @@ function AuthenticatedApp() {
               ================================================= */}
 
               {view === 'professional' && (
-                <ProfessionalDashboard
-                  onPatientOpen={
-                    openPatient
-                  }
-                />
+                <ProfessionalDashboard />
               )}
 
               {/* =================================================
@@ -717,6 +730,7 @@ function NavItem({
 }) {
   return (
     <button
+      type="button"
       className={`nav-item ${
         active ? 'active' : ''
       }`}
@@ -736,11 +750,9 @@ function getTitle(
   patientId: string | null,
   professional: boolean
 ) {
-  /*
-   * ----------------------------------------------------------
-   * PROFESSIONAL PATIENT REVIEW
-   * ----------------------------------------------------------
-   */
+  // ----------------------------------------------------------
+  // PROFESSIONAL PATIENT REVIEW
+  // ----------------------------------------------------------
 
   if (
     professional &&
@@ -749,11 +761,9 @@ function getTitle(
     return 'Patient Clinical Review';
   }
 
-  /*
-   * ----------------------------------------------------------
-   * PAGE TITLES
-   * ----------------------------------------------------------
-   */
+  // ----------------------------------------------------------
+  // PAGE TITLES
+  // ----------------------------------------------------------
 
   const titles: Record<
     View,
@@ -811,6 +821,7 @@ function initials(
 
   return name
     .split(/\s+/)
+    .filter(Boolean)
     .slice(0, 2)
     .map(
       (part) => part[0]
