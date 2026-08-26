@@ -196,16 +196,30 @@ export async function addSafetyReport(
   patientId: string,
   report: Partial<SafetyReport>,
 ): Promise<SafetyReport | null> {
-  const { data, error } = await supabase
-    .from('safety_reports')
-    .insert({
-      patient_id: patientId,
-      report_code: 'SR-' + Date.now().toString().slice(-6),
-      ...report,
-    })
-    .select()
-    .single();
-  if (error) console.error('addSafetyReport:', error.message);
+
+  const { data, error } = await supabase.rpc(
+    'submit_safety_report',
+    {
+      p_patient_id: patientId,
+      p_symptom: report.symptom || '',
+      p_severity: report.severity || 'Mild',
+      p_reported_at:
+        report.reported_at || new Date().toISOString(),
+      p_duration: report.duration || null,
+      p_repeated: report.repeated ?? false,
+      p_description: report.description || null,
+      p_medication_exposure:
+        report.medication_exposure || null,
+      p_food_exposure:
+        report.food_exposure || null,
+    }
+  );
+
+  if (error) {
+    console.error('addSafetyReport RPC:', error);
+    return null;
+  }
+
   return data as SafetyReport | null;
 }
 
