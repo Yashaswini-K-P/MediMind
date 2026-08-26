@@ -8,65 +8,111 @@ interface Patient {
   full_name: string;
 }
 
-interface MedicationSchedule {
+interface Medication {
   id: string;
   patient_id: string;
   medication_name: string;
   dose: string;
-  dose_unit: string | null;
-  scheduled_time: string;
-  frequency: string | null;
-  days_of_week: string[] | null;
-  start_date: string;
-  end_date: string | null;
   active: boolean;
 }
 
 interface DoseRecord {
   id: string;
   patient_id: string;
-  schedule_id: string | null;
-  medication_name: string;
+  medication_name: string | null;
   dose: string | null;
   scheduled_at: string;
   taken_at: string | null;
-  status: string;
+  status: string | null;
 }
 
-type CalendarDay = {
-  date: Date;
-  dateKey: string;
-  isCurrentMonth: boolean;
-};
+type DoseStatus =
+  | 'taken'
+  | 'missed'
+  | 'late'
+  | 'scheduled';
+
+interface CalendarDose {
+  id: string;
+  medicationName: string;
+  dose: string;
+  scheduledAt: Date;
+  takenAt: Date | null;
+  status: DoseStatus;
+}
+
+interface MedicationStats {
+  name: string;
+  dose: string;
+  scheduled: number;
+  taken: number;
+  missed: number;
+  late: number;
+  adherence: number;
+}
+
+const DAYS = [
+  'Sun',
+  'Mon',
+  'Tue',
+  'Wed',
+  'Thu',
+  'Fri',
+  'Sat',
+];
+
+const MONTH_NAMES = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
 
 export default function MedicationMonitoring() {
   const { user } = useAuth();
 
   const [patients, setPatients] = useState<Patient[]>([]);
-  const [schedules, setSchedules] = useState<MedicationSchedule[]>([]);
-  const [doseRecords, setDoseRecords] = useState<DoseRecord[]>([]);
+  const [selectedPatientId, setSelectedPatientId] =
+    useState<string>('');
+
+  const [medications, setMedications] = useState<Medication[]>(
+    []
+  );
+
+  const [doseRecords, setDoseRecords] = useState<DoseRecord[]>(
+    []
+  );
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  /*
+   * Start with current month.
+   */
   const [currentMonth, setCurrentMonth] = useState(
-    new Date()
+    new Date().getMonth()
   );
 
-  const [selectedDate, setSelectedDate] = useState(
-    new Date()
+  const [currentYear, setCurrentYear] = useState(
+    new Date().getFullYear()
   );
 
-  const [selectedPatientId, setSelectedPatientId] =
-    useState<string>('all');
-
-  const [selectedStatus, setSelectedStatus] =
-    useState<string>('all');
-
+  /*
+   * ---------------------------------------------------------
+   * LOAD ASSIGNED PATIENTS
+   * ---------------------------------------------------------
+   */
   useEffect(() => {
-    async function loadMedicationMonitoring() {
+    async function loadPatients() {
       if (!user) {
-        setLoading(false);
         return;
       }
 
@@ -75,60 +121,109 @@ export default function MedicationMonitoring() {
 
       try {
         /*
-         * ----------------------------------------------------
-         * 1. Find patients assigned to this professional
-         * ----------------------------------------------------
+         * Assignments use auth.uid() as professional_id.
          */
-
-        const { data: assignments, error: assignmentError } =
-          await supabase
-            .from('assignments')
-            .select('patient_id')
-            .eq('professional_id', user.id)
-            .eq('status', 'active');
+        const {
+          data: assignments,
+          error: assignmentError,
+        } = await supabase
+          .from('assignments')
+          .select('patient_id')
+          .eq('professional_id', user.id)
+          .eq('status', 'active');
 
         if (assignmentError) {
           throw assignmentError;
         }
 
         const patientIds = (assignments ?? []).map(
-          assignment => assignment.patient_id
+          (row) => row.patient_id
         );
 
         if (patientIds.length === 0) {
           setPatients([]);
-          setSchedules([]);
-          setDoseRecords([]);
+          setSelectedPatientId('');
           setLoading(false);
           return;
         }
 
         /*
-         * ----------------------------------------------------
-         * 2. Patient profiles
-         * ----------------------------------------------------
+         * Load patient profiles.
          */
-
-        const { data: patientData, error: patientError } =
-          await supabase
-            .from('patient_profiles')
-            .select(`
-              id,
-              patient_code,
-              full_name
-            `)
-            .in('id', patientIds);
+        const {
+          data: patientData,
+          error: patientError,
+        } = await supabase
+          .from('patient_profiles')
+          .select(`
+            id,
+            patient_code,
+            full_name
+          `)
+          .in('id', patientIds)
+          .order('full_name', {
+            ascending: true,
+          });
 
         if (patientError) {
           throw patientError;
         }
 
-        /*
-         * ----------------------------------------------------
-         * 3. Medication schedules
-         * ----------------------------------------------------
-         */
+        const loadedPatients =
+          (patientData ?? []) as Patient[];
 
+        setPatients(loadedPatients);
+
+        /*
+         * Automatically select first patient.
+         */
+        if (
+          loadedPatients.length > 0 &&
+          !selectedPatientId
+        ) {
+          setSelectedPatientId(
+            loadedPatients[0].id
+          );
+        }
+      } catch (err) {
+        console.error(
+          'Failed to load monitoring patients:',
+          err
+        );
+
+        setError(
+          err instanceof Error
+            ? err.message
+            : 'Failed to load patients'
+        );
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    void loadPatients();
+  }, [user]);
+
+  /*
+   * ---------------------------------------------------------
+   * LOAD MEDICATIONS + DOSES FOR SELECTED PATIENT
+   * ---------------------------------------------------------
+   */
+  useEffect(() => {
+    async function loadPatientMedicationData() {
+      if (!selectedPatientId) {
+        setMedications([]);
+        setDoseRecords([]);
+        return;
+      }
+
+      setLoading(true);
+      setError(null);
+
+      try {
+        /*
+         * Active medication schedules.
+         */
         const {
           data: medicationData,
           error: medicationError,
@@ -139,454 +234,487 @@ export default function MedicationMonitoring() {
             patient_id,
             medication_name,
             dose,
-            dose_unit,
-            scheduled_time,
-            frequency,
-            days_of_week,
-            start_date,
-            end_date,
             active
           `)
-          .in('patient_id', patientIds)
-          .eq('active', true);
+          .eq('patient_id', selectedPatientId)
+          .eq('active', true)
+          .order('medication_name', {
+            ascending: true,
+          });
 
         if (medicationError) {
           throw medicationError;
         }
 
-        /*
-         * ----------------------------------------------------
-         * 4. Dose records
-         * ----------------------------------------------------
-         */
+        setMedications(
+          (medicationData ?? []) as Medication[]
+        );
 
-        const { data: doseData, error: doseError } =
-          await supabase
-            .from('dose_records')
-            .select(`
-              id,
-              patient_id,
-              schedule_id,
-              medication_name,
-              dose,
-              scheduled_at,
-              taken_at,
-              status
-            `)
-            .in('patient_id', patientIds)
-            .order('scheduled_at', {
-              ascending: true,
-            });
+        /*
+         * Dose records.
+         *
+         * We load all dose records for the selected patient.
+         */
+        const {
+          data: doseData,
+          error: doseError,
+        } = await supabase
+          .from('dose_records')
+          .select(`
+            id,
+            patient_id,
+            medication_name,
+            dose,
+            scheduled_at,
+            taken_at,
+            status
+          `)
+          .eq('patient_id', selectedPatientId)
+          .order('scheduled_at', {
+            ascending: true,
+          });
 
         if (doseError) {
           throw doseError;
         }
 
-        setPatients((patientData ?? []) as Patient[]);
-        setSchedules(
-          (medicationData ?? []) as MedicationSchedule[]
-        );
         setDoseRecords(
           (doseData ?? []) as DoseRecord[]
         );
       } catch (err) {
         console.error(
-          'Failed to load medication monitoring:',
+          'Failed to load medication monitoring data:',
           err
         );
 
         setError(
           err instanceof Error
             ? err.message
-            : 'Failed to load medication monitoring'
+            : 'Failed to load medication data'
         );
+
+        setMedications([]);
+        setDoseRecords([]);
       } finally {
         setLoading(false);
       }
     }
 
-    void loadMedicationMonitoring();
-  }, [user]);
+    void loadPatientMedicationData();
+  }, [selectedPatientId]);
 
   /*
-   * --------------------------------------------------------
-   * Helpers
-   * --------------------------------------------------------
+   * ---------------------------------------------------------
+   * SELECTED PATIENT
+   * ---------------------------------------------------------
    */
-
-  function formatDateKey(date: Date) {
-    const year = date.getFullYear();
-    const month = String(
-      date.getMonth() + 1
-    ).padStart(2, '0');
-
-    const day = String(
-      date.getDate()
-    ).padStart(2, '0');
-
-    return `${year}-${month}-${day}`;
-  }
-
-  function parseLocalDate(dateString: string) {
-    const [year, month, day] =
-      dateString.split('-').map(Number);
-
-    return new Date(
-      year,
-      month - 1,
-      day
+  const selectedPatient = useMemo(() => {
+    return patients.find(
+      (patient) =>
+        patient.id === selectedPatientId
     );
-  }
+  }, [patients, selectedPatientId]);
 
-  function formatTime(time: string) {
-    if (!time) return '—';
+  /*
+   * ---------------------------------------------------------
+   * CONVERT DATABASE DOSES INTO CALENDAR DOSES
+   * ---------------------------------------------------------
+   */
+  const calendarDoses = useMemo<CalendarDose[]>(() => {
+    return doseRecords.map((dose) => {
+      const scheduledAt = new Date(
+        dose.scheduled_at
+      );
 
-    const [hourString, minuteString] =
-      time.split(':');
+      const takenAt = dose.taken_at
+        ? new Date(dose.taken_at)
+        : null;
 
-    const hour = Number(hourString);
-    const minute = Number(minuteString);
+      let status: DoseStatus = 'scheduled';
 
-    const date = new Date();
+      /*
+       * Respect explicit database status first.
+       */
+      const databaseStatus =
+        dose.status?.toLowerCase();
 
-    date.setHours(hour);
-    date.setMinutes(minute);
+      if (databaseStatus === 'taken') {
+        /*
+         * A dose can be considered "late" if it was
+         * taken after the scheduled time.
+         */
+        if (
+          takenAt &&
+          takenAt.getTime() >
+            scheduledAt.getTime()
+        ) {
+          status = 'late';
+        } else {
+          status = 'taken';
+        }
+      } else if (
+        databaseStatus === 'missed'
+      ) {
+        status = 'missed';
+      } else if (
+        databaseStatus === 'late'
+      ) {
+        status = 'late';
+      } else if (
+        databaseStatus === 'scheduled'
+      ) {
+        status = 'scheduled';
+      } else {
+        /*
+         * Fallback when status is empty.
+         */
+        if (takenAt) {
+          if (
+            takenAt.getTime() >
+            scheduledAt.getTime()
+          ) {
+            status = 'late';
+          } else {
+            status = 'taken';
+          }
+        } else if (
+          scheduledAt.getTime() <
+          Date.now()
+        ) {
+          status = 'missed';
+        } else {
+          status = 'scheduled';
+        }
+      }
 
-    return date.toLocaleTimeString([], {
-      hour: 'numeric',
-      minute: '2-digit',
+      return {
+        id: dose.id,
+        medicationName:
+          dose.medication_name || 'Medication',
+        dose: dose.dose || '',
+        scheduledAt,
+        takenAt,
+        status,
+      };
     });
-  }
-
-  function getPatientName(patientId: string) {
-    return (
-      patients.find(
-        patient => patient.id === patientId
-      )?.full_name ?? 'Unknown patient'
-    );
-  }
-
-  function getPatientCode(patientId: string) {
-    return (
-      patients.find(
-        patient => patient.id === patientId
-      )?.patient_code ?? '—'
-    );
-  }
+  }, [doseRecords]);
 
   /*
-   * --------------------------------------------------------
-   * Calendar generation
-   * --------------------------------------------------------
+   * ---------------------------------------------------------
+   * CALENDAR DAYS
+   * ---------------------------------------------------------
    */
-
   const calendarDays = useMemo(() => {
-    const year = currentMonth.getFullYear();
-    const month = currentMonth.getMonth();
-
     const firstDay = new Date(
-      year,
-      month,
+      currentYear,
+      currentMonth,
       1
     );
 
     const lastDay = new Date(
-      year,
-      month + 1,
+      currentYear,
+      currentMonth + 1,
       0
     );
 
-    const startDay = firstDay.getDay();
+    const firstWeekday =
+      firstDay.getDay();
 
-    const totalDays = lastDay.getDate();
+    const daysInMonth =
+      lastDay.getDate();
 
-    const days: CalendarDay[] = [];
+    const cells: Array<Date | null> = [];
 
     /*
-     * Previous month's trailing days
+     * Empty cells before first day.
      */
-
-    for (let i = startDay - 1; i >= 0; i--) {
-      const date = new Date(
-        year,
-        month,
-        -i
-      );
-
-      days.push({
-        date,
-        dateKey: formatDateKey(date),
-        isCurrentMonth: false,
-      });
+    for (
+      let i = 0;
+      i < firstWeekday;
+      i++
+    ) {
+      cells.push(null);
     }
 
     /*
-     * Current month
+     * Actual month days.
      */
-
     for (
       let day = 1;
-      day <= totalDays;
+      day <= daysInMonth;
       day++
     ) {
-      const date = new Date(
-        year,
-        month,
-        day
+      cells.push(
+        new Date(
+          currentYear,
+          currentMonth,
+          day
+        )
       );
-
-      days.push({
-        date,
-        dateKey: formatDateKey(date),
-        isCurrentMonth: true,
-      });
     }
 
-    /*
-     * Next month's leading days
-     */
-
-    while (days.length < 42) {
-      const date = new Date(
-        year,
-        month,
-        totalDays + (days.length - startDay + 1)
-      );
-
-      days.push({
-        date,
-        dateKey: formatDateKey(date),
-        isCurrentMonth: false,
-      });
-    }
-
-    return days;
-  }, [currentMonth]);
+    return cells;
+  }, [currentMonth, currentYear]);
 
   /*
-   * --------------------------------------------------------
-   * Dose records for calendar
-   * --------------------------------------------------------
+   * ---------------------------------------------------------
+   * DOSES FOR A PARTICULAR DAY
+   * ---------------------------------------------------------
    */
-
-  const doseCountByDate = useMemo(() => {
-    const map: Record<string, number> = {};
-
-    doseRecords.forEach(record => {
-      if (
-        selectedPatientId !== 'all' &&
-        record.patient_id !== selectedPatientId
-      ) {
-        return;
-      }
-
-      const dateKey = formatDateKey(
-        new Date(record.scheduled_at)
-      );
-
-      map[dateKey] =
-        (map[dateKey] ?? 0) + 1;
-    });
-
-    return map;
-  }, [doseRecords, selectedPatientId]);
-
-  /*
-   * --------------------------------------------------------
-   * Selected day records
-   * --------------------------------------------------------
-   */
-
-  const selectedDayRecords = useMemo(() => {
-    const selectedKey =
-      formatDateKey(selectedDate);
-
-    return doseRecords
-      .filter(record => {
-        const recordKey =
-          formatDateKey(
-            new Date(record.scheduled_at)
-          );
-
-        if (recordKey !== selectedKey) {
-          return false;
-        }
-
-        if (
-          selectedPatientId !== 'all' &&
-          record.patient_id !== selectedPatientId
-        ) {
-          return false;
-        }
-
-        if (
-          selectedStatus !== 'all' &&
-          record.status !== selectedStatus
-        ) {
-          return false;
-        }
-
-        return true;
-      })
-      .sort(
-        (a, b) =>
-          new Date(
-            a.scheduled_at
-          ).getTime() -
-          new Date(
-            b.scheduled_at
-          ).getTime()
-      );
-  }, [
-    doseRecords,
-    selectedDate,
-    selectedPatientId,
-    selectedStatus,
-  ]);
-
-  /*
-   * --------------------------------------------------------
-   * Scheduled medications for selected day
-   *
-   * This allows us to display schedules even when a dose
-   * record hasn't been created yet.
-   * --------------------------------------------------------
-   */
-
-  const selectedDaySchedules = useMemo(() => {
-    const selectedKey =
-      formatDateKey(selectedDate);
-
-    const selectedDateOnly =
-      parseLocalDate(selectedKey);
-
-    const dayName =
-      selectedDateOnly
-        .toLocaleDateString('en-US', {
-          weekday: 'long',
-        })
-        .toLowerCase();
-
-    return schedules.filter(schedule => {
-      if (
-        selectedPatientId !== 'all' &&
-        schedule.patient_id !== selectedPatientId
-      ) {
-        return false;
-      }
-
-      const startDate =
-        parseLocalDate(schedule.start_date);
-
-      if (selectedDateOnly < startDate) {
-        return false;
-      }
-
-      if (schedule.end_date) {
-        const endDate =
-          parseLocalDate(schedule.end_date);
-
-        if (selectedDateOnly > endDate) {
-          return false;
-        }
-      }
-
-      if (
-        schedule.days_of_week &&
-        schedule.days_of_week.length > 0
-      ) {
-        return schedule.days_of_week.some(
-          day =>
-            day.toLowerCase() === dayName
+  const getDosesForDay = (
+    date: Date
+  ) => {
+    return calendarDoses.filter(
+      (dose) => {
+        return (
+          dose.scheduledAt.getFullYear() ===
+            date.getFullYear() &&
+          dose.scheduledAt.getMonth() ===
+            date.getMonth() &&
+          dose.scheduledAt.getDate() ===
+            date.getDate()
         );
       }
+    );
+  };
 
-      return true;
-    });
+  /*
+   * ---------------------------------------------------------
+   * MONTH DOSES
+   * ---------------------------------------------------------
+   */
+  const monthDoses = useMemo(() => {
+    return calendarDoses.filter(
+      (dose) => {
+        return (
+          dose.scheduledAt.getFullYear() ===
+            currentYear &&
+          dose.scheduledAt.getMonth() ===
+            currentMonth
+        );
+      }
+    );
   }, [
-    schedules,
-    selectedDate,
-    selectedPatientId,
+    calendarDoses,
+    currentMonth,
+    currentYear,
   ]);
 
   /*
-   * --------------------------------------------------------
-   * Summary
-   * --------------------------------------------------------
+   * ---------------------------------------------------------
+   * MONTH SUMMARY
+   * ---------------------------------------------------------
+   *
+   * Taken + late = administered.
+   * Missed reduces adherence.
    */
+  const monthlyStats = useMemo(() => {
+    const taken = monthDoses.filter(
+      (dose) =>
+        dose.status === 'taken'
+    ).length;
 
-  const selectedDaySummary = useMemo(() => {
-    const total = selectedDayRecords.length;
+    const late = monthDoses.filter(
+      (dose) =>
+        dose.status === 'late'
+    ).length;
 
-    const taken =
-      selectedDayRecords.filter(
-        record =>
-          record.status === 'taken'
-      ).length;
+    const missed = monthDoses.filter(
+      (dose) =>
+        dose.status === 'missed'
+    ).length;
 
-    const scheduled =
-      selectedDayRecords.filter(
-        record =>
-          record.status === 'scheduled'
-      ).length;
+    const scheduled = monthDoses.filter(
+      (dose) =>
+        dose.status === 'scheduled'
+    ).length;
 
-    const missed =
-      selectedDayRecords.filter(
-        record =>
-          record.status === 'missed'
-      ).length;
+    const completed =
+      taken + late;
+
+    const adherenceBase =
+      completed + missed;
+
+    const adherence =
+      adherenceBase > 0
+        ? Math.round(
+            (completed /
+              adherenceBase) *
+              100
+          )
+        : 0;
 
     return {
-      total,
       taken,
-      scheduled,
       missed,
+      late,
+      scheduled,
+      adherence,
     };
-  }, [selectedDayRecords]);
+  }, [monthDoses]);
 
   /*
-   * --------------------------------------------------------
-   * Month navigation
-   * --------------------------------------------------------
+   * ---------------------------------------------------------
+   * MEDICATION-SPECIFIC STATS
+   * ---------------------------------------------------------
    */
+  const medicationStats =
+    useMemo<MedicationStats[]>(() => {
+      const map =
+        new Map<
+          string,
+          MedicationStats
+        >();
 
-  function previousMonth() {
-    setCurrentMonth(
-      new Date(
-        currentMonth.getFullYear(),
-        currentMonth.getMonth() - 1,
-        1
-      )
-    );
-  }
+      /*
+       * Start with active medications.
+       */
+      medications.forEach(
+        (medication) => {
+          const key =
+            medication.medication_name
+              .trim()
+              .toLowerCase();
 
-  function nextMonth() {
-    setCurrentMonth(
-      new Date(
-        currentMonth.getFullYear(),
-        currentMonth.getMonth() + 1,
-        1
-      )
-    );
-  }
+          if (!map.has(key)) {
+            map.set(key, {
+              name:
+                medication.medication_name,
+              dose: medication.dose,
+              scheduled: 0,
+              taken: 0,
+              missed: 0,
+              late: 0,
+              adherence: 0,
+            });
+          }
+        }
+      );
 
-  function goToToday() {
-    const today = new Date();
+      /*
+       * Add monthly dose records.
+       */
+      monthDoses.forEach(
+        (dose) => {
+          const key =
+            dose.medicationName
+              .trim()
+              .toLowerCase();
 
-    setCurrentMonth(
-      new Date(
-        today.getFullYear(),
-        today.getMonth(),
-        1
-      )
-    );
+          const existing =
+            map.get(key);
 
-    setSelectedDate(today);
-  }
+          if (!existing) {
+            map.set(key, {
+              name:
+                dose.medicationName,
+              dose: dose.dose,
+              scheduled: 0,
+              taken: 0,
+              missed: 0,
+              late: 0,
+              adherence: 0,
+            });
+          }
 
-  function isToday(date: Date) {
-    const today = new Date();
+          const row =
+            map.get(key)!;
 
+          row.scheduled += 1;
+
+          if (
+            dose.status ===
+            'taken'
+          ) {
+            row.taken += 1;
+          }
+
+          if (
+            dose.status ===
+            'missed'
+          ) {
+            row.missed += 1;
+          }
+
+          if (
+            dose.status ===
+            'late'
+          ) {
+            row.late += 1;
+          }
+        }
+      );
+
+      /*
+       * Calculate adherence.
+       */
+      map.forEach((row) => {
+        const administered =
+          row.taken +
+          row.late;
+
+        const denominator =
+          administered +
+          row.missed;
+
+        row.adherence =
+          denominator > 0
+            ? Math.round(
+                (administered /
+                  denominator) *
+                  100
+              )
+            : 0;
+      });
+
+      return Array.from(
+        map.values()
+      );
+    }, [
+      medications,
+      monthDoses,
+    ]);
+
+  /*
+   * ---------------------------------------------------------
+   * NAVIGATE MONTH
+   * ---------------------------------------------------------
+   */
+  const changeMonth = (
+    direction: number
+  ) => {
+    const nextMonth =
+      currentMonth + direction;
+
+    if (nextMonth < 0) {
+      setCurrentMonth(11);
+      setCurrentYear(
+        currentYear - 1
+      );
+    } else if (
+      nextMonth > 11
+    ) {
+      setCurrentMonth(0);
+      setCurrentYear(
+        currentYear + 1
+      );
+    } else {
+      setCurrentMonth(
+        nextMonth
+      );
+    }
+  };
+
+  /*
+   * ---------------------------------------------------------
+   * TODAY
+   * ---------------------------------------------------------
+   */
+  const today = new Date();
+
+  const isToday = (
+    date: Date
+  ) => {
     return (
       date.getFullYear() ===
         today.getFullYear() &&
@@ -595,530 +723,645 @@ export default function MedicationMonitoring() {
       date.getDate() ===
         today.getDate()
     );
-  }
+  };
 
-  function isSelected(date: Date) {
-    return (
-      formatDateKey(date) ===
-      formatDateKey(selectedDate)
+  /*
+   * ---------------------------------------------------------
+   * TIME FORMAT
+   * ---------------------------------------------------------
+   */
+  const formatTime = (
+    date: Date
+  ) => {
+    return date.toLocaleTimeString(
+      [],
+      {
+        hour: '2-digit',
+        minute: '2-digit',
+      }
     );
-  }
+  };
 
-  function statusLabel(status: string) {
+  /*
+   * ---------------------------------------------------------
+   * STATUS LABEL
+   * ---------------------------------------------------------
+   */
+  const statusLabel = (
+    status: DoseStatus
+  ) => {
     switch (status) {
       case 'taken':
-        return 'Taken';
+        return 'TAKEN';
 
       case 'missed':
-        return 'Missed';
+        return 'MISSED';
 
-      case 'skipped':
-        return 'Skipped';
+      case 'late':
+        return 'LATE';
 
       case 'scheduled':
-      default:
-        return 'Scheduled';
-    }
-  }
+        return 'SCHEDULED';
 
-  function statusClass(status: string) {
+      default:
+        return '';
+    }
+  };
+
+  /*
+   * ---------------------------------------------------------
+   * STATUS CLASS
+   * ---------------------------------------------------------
+   */
+  const statusClass = (
+    status: DoseStatus
+  ) => {
     switch (status) {
       case 'taken':
-        return 'bg-green-100 text-green-700';
+        return 'mm-dose-taken';
 
       case 'missed':
-        return 'bg-red-100 text-red-700';
+        return 'mm-dose-missed';
 
-      case 'skipped':
-        return 'bg-orange-100 text-orange-700';
+      case 'late':
+        return 'mm-dose-late';
+
+      case 'scheduled':
+        return 'mm-dose-scheduled';
 
       default:
-        return 'bg-blue-100 text-blue-700';
+        return '';
     }
+  };
+
+  /*
+   * ---------------------------------------------------------
+   * LOADING
+   * ---------------------------------------------------------
+   */
+  if (loading && patients.length === 0) {
+    return (
+      <div className="mm-page">
+        <div className="mm-card mm-loading">
+          Loading medication monitoring...
+        </div>
+      </div>
+    );
   }
 
-  const monthTitle =
-    currentMonth.toLocaleDateString(
-      'en-US',
-      {
-        month: 'long',
-        year: 'numeric',
-      }
-    );
-
-  const selectedDateTitle =
-    selectedDate.toLocaleDateString(
-      'en-US',
-      {
-        weekday: 'long',
-        month: 'long',
-        day: 'numeric',
-        year: 'numeric',
-      }
-    );
-
+  /*
+   * ---------------------------------------------------------
+   * RENDER
+   * ---------------------------------------------------------
+   */
   return (
-    <div className="space-y-6">
-      {/* Header */}
+    <div className="mm-page">
 
-      <div>
-        <h1 className="text-2xl font-semibold">
-          Medication Monitoring
-        </h1>
+      {/* =====================================================
+          ERROR
+      ====================================================== */}
 
-        <p className="mt-1 text-muted-foreground">
-          Monitor medication schedules and dose activity
-          for assigned patients.
-        </p>
-      </div>
+      {error && (
+        <div className="mm-error">
+          <strong>
+            Unable to load monitoring data
+          </strong>
 
-      {/* Filters */}
-
-      <div className="rounded-xl border bg-card p-5">
-        <div className="grid gap-4 sm:grid-cols-2">
           <div>
-            <label className="mb-2 block text-sm font-medium">
-              Patient
-            </label>
+            {error}
+          </div>
+        </div>
+      )}
 
-            <select
-              value={selectedPatientId}
-              onChange={event =>
-                setSelectedPatientId(
-                  event.target.value
-                )
-              }
-              className="w-full rounded-lg border bg-background px-3 py-2 text-sm"
-            >
-              <option value="all">
-                All Patients
-              </option>
+      {/* =====================================================
+          PATIENT SELECTOR
+      ====================================================== */}
 
-              {patients.map(patient => (
+      <div className="mm-card mm-patient-bar">
+
+        <div>
+          <label className="mm-label">
+            Patient
+          </label>
+
+          <select
+            value={selectedPatientId}
+            onChange={(event) =>
+              setSelectedPatientId(
+                event.target.value
+              )
+            }
+            className="mm-select"
+          >
+            {patients.map(
+              (patient) => (
                 <option
                   key={patient.id}
                   value={patient.id}
                 >
                   {patient.full_name}
                   {patient.patient_code
-                    ? ` (${patient.patient_code})`
+                    ? ` — ${patient.patient_code}`
                     : ''}
                 </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="mb-2 block text-sm font-medium">
-              Dose Status
-            </label>
-
-            <select
-              value={selectedStatus}
-              onChange={event =>
-                setSelectedStatus(
-                  event.target.value
-                )
-              }
-              className="w-full rounded-lg border bg-background px-3 py-2 text-sm"
-            >
-              <option value="all">
-                All Statuses
-              </option>
-
-              <option value="taken">
-                Taken
-              </option>
-
-              <option value="scheduled">
-                Scheduled
-              </option>
-
-              <option value="missed">
-                Missed
-              </option>
-
-              <option value="skipped">
-                Skipped
-              </option>
-            </select>
-          </div>
+              )
+            )}
+          </select>
         </div>
+
+        <div className="mm-patient-info">
+
+          <span>
+            Patient:
+          </span>
+
+          <strong>
+            {selectedPatient?.full_name ||
+              'No patient selected'}
+          </strong>
+
+          {selectedPatient?.patient_code && (
+            <span>
+              #{selectedPatient.patient_code}
+            </span>
+          )}
+
+        </div>
+
       </div>
 
-      {/* Calendar */}
+      {/* =====================================================
+          CALENDAR HEADER
+      ====================================================== */}
 
-      <div className="rounded-xl border bg-card">
-        {/* Calendar header */}
+      <div className="mm-card">
 
-        <div className="flex items-center justify-between border-b p-5">
+        <div className="mm-calendar-header">
+
           <div>
-            <h2 className="text-lg font-semibold">
-              {monthTitle}
+            <h2>
+              Dosing Calendar
             </h2>
 
-            <p className="text-sm text-muted-foreground">
-              Select a date to review medication activity.
+            <p>
+              Medication schedule and
+              adherence history
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={previousMonth}
-              className="rounded-lg border px-3 py-2 text-sm hover:bg-muted"
-            >
-              ←
-            </button>
+          <div className="mm-month-navigation">
 
             <button
-              type="button"
-              onClick={goToToday}
-              className="rounded-lg border px-3 py-2 text-sm hover:bg-muted"
+              className="mm-nav-button"
+              onClick={() =>
+                changeMonth(-1)
+              }
+              aria-label="Previous month"
             >
-              Today
+              ‹
             </button>
 
+            <h3>
+              {MONTH_NAMES[
+                currentMonth
+              ]}{' '}
+              {currentYear}
+            </h3>
+
             <button
-              type="button"
-              onClick={nextMonth}
-              className="rounded-lg border px-3 py-2 text-sm hover:bg-muted"
+              className="mm-nav-button"
+              onClick={() =>
+                changeMonth(1)
+              }
+              aria-label="Next month"
             >
-              →
+              ›
             </button>
+
           </div>
+
         </div>
 
-        {loading ? (
-          <div className="p-8 text-center text-sm text-muted-foreground">
-            Loading medication calendar...
-          </div>
-        ) : error ? (
-          <div className="p-8 text-center text-sm text-destructive">
-            {error}
-          </div>
-        ) : (
-          <div className="p-5">
-            {/* Weekdays */}
+        {/* ===================================================
+            LEGEND
+        ==================================================== */}
 
-            <div className="grid grid-cols-7 border-l border-t">
-              {[
-                'Sun',
-                'Mon',
-                'Tue',
-                'Wed',
-                'Thu',
-                'Fri',
-                'Sat',
-              ].map(day => (
-                <div
-                  key={day}
-                  className="border-b border-r bg-muted/40 p-3 text-center text-xs font-semibold"
-                >
-                  {day}
-                </div>
-              ))}
+        <div className="mm-legend">
 
-              {/* Days */}
+          <span>
+            <i className="mm-dot mm-dot-taken" />
+            Taken
+          </span>
 
-              {calendarDays.map(day => {
-                const count =
-                  doseCountByDate[
-                    day.dateKey
-                  ] ?? 0;
+          <span>
+            <i className="mm-dot mm-dot-missed" />
+            Missed
+          </span>
 
+          <span>
+            <i className="mm-dot mm-dot-late" />
+            Late
+          </span>
+
+          <span>
+            <i className="mm-dot mm-dot-scheduled" />
+            Scheduled
+          </span>
+
+        </div>
+
+        {/* ===================================================
+            CALENDAR
+        ==================================================== */}
+
+        <div className="mm-calendar">
+
+          {/* Weekday headings */}
+          {DAYS.map(
+            (day) => (
+              <div
+                key={day}
+                className="mm-weekday"
+              >
+                {day}
+              </div>
+            )
+          )}
+
+          {/* Calendar cells */}
+          {calendarDays.map(
+            (date, index) => {
+
+              if (!date) {
                 return (
-                  <button
-                    type="button"
-                    key={day.dateKey}
-                    onClick={() =>
-                      setSelectedDate(
-                        day.date
-                      )
-                    }
-                    className={`min-h-[90px] border-b border-r p-2 text-left transition hover:bg-muted/50 ${
-                      !day.isCurrentMonth
-                        ? 'text-muted-foreground/40'
-                        : ''
-                    } ${
-                      isSelected(day.date)
-                        ? 'bg-primary/5 ring-2 ring-inset ring-primary'
-                        : ''
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span
-                        className={`flex h-7 w-7 items-center justify-center rounded-full text-sm ${
-                          isToday(day.date)
-                            ? 'bg-primary text-primary-foreground font-semibold'
-                            : ''
-                        }`}
-                      >
-                        {day.date.getDate()}
-                      </span>
-
-                      {count > 0 && (
-                        <span className="text-xs text-muted-foreground">
-                          {count}
-                        </span>
-                      )}
-                    </div>
-
-                    {count > 0 && (
-                      <div className="mt-3 flex items-center gap-1">
-                        <span className="h-2 w-2 rounded-full bg-primary" />
-
-                        <span className="text-xs text-muted-foreground">
-                          {count} dose
-                          {count !== 1
-                            ? 's'
-                            : ''}
-                        </span>
-                      </div>
-                    )}
-                  </button>
+                  <div
+                    key={`empty-${index}`}
+                    className="mm-day mm-day-empty"
+                  />
                 );
-              })}
-            </div>
-          </div>
-        )}
+              }
+
+              const doses =
+                getDosesForDay(
+                  date
+                );
+
+              return (
+                <div
+                  key={date.toISOString()}
+                  className={`mm-day ${
+                    isToday(date)
+                      ? 'mm-day-today'
+                      : ''
+                  }`}
+                >
+
+                  <div className="mm-day-number">
+                    {date.getDate()}
+
+                    {isToday(date) && (
+                      <span className="mm-today">
+                        Today
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="mm-day-doses">
+
+                    {doses.map(
+                      (dose) => (
+                        <div
+                          key={dose.id}
+                          className={`mm-dose ${statusClass(
+                            dose.status
+                          )}`}
+                        >
+
+                          <div className="mm-dose-name">
+                            {dose.medicationName}
+                          </div>
+
+                          <div className="mm-dose-meta">
+                            {dose.dose}
+                          </div>
+
+                          <div className="mm-dose-time">
+                            {formatTime(
+                              dose.scheduledAt
+                            )}{' '}
+                            •{' '}
+                            {statusLabel(
+                              dose.status
+                            )}
+                          </div>
+
+                        </div>
+                      )
+                    )}
+
+                  </div>
+
+                </div>
+              );
+            }
+          )}
+
+        </div>
+
       </div>
 
-      {/* Selected Date */}
+      {/* =====================================================
+          MONTH SUMMARY
+      ====================================================== */}
 
-      <div className="rounded-xl border bg-card">
-        <div className="border-b p-5">
-          <h2 className="text-lg font-semibold">
-            {selectedDateTitle}
-          </h2>
+      <div className="mm-stats-grid">
 
-          <p className="text-sm text-muted-foreground">
-            Medication activity for the selected date.
-          </p>
+        <StatCard
+          label="Taken doses"
+          value={monthlyStats.taken}
+          type="taken"
+        />
+
+        <StatCard
+          label="Missed doses"
+          value={monthlyStats.missed}
+          type="missed"
+        />
+
+        <StatCard
+          label="Late doses"
+          value={monthlyStats.late}
+          type="late"
+        />
+
+        <StatCard
+          label="Adherence"
+          value={`${monthlyStats.adherence}%`}
+          type="adherence"
+        />
+
+      </div>
+
+      {/* =====================================================
+          HOW TO READ
+      ====================================================== */}
+
+      <div className="mm-card mm-help">
+
+        <strong>
+          How to read
+        </strong>
+
+        <p>
+          Each medication dose appears on
+          its scheduled date and time.
+          Green = taken, red = missed,
+          amber = late, grey = future /
+          scheduled.
+        </p>
+
+      </div>
+
+      {/* =====================================================
+          INDIVIDUAL MEDICATION ADHERENCE
+      ====================================================== */}
+
+      <div className="mm-card">
+
+        <div className="mm-section-header">
+
+          <div>
+            <h2>
+              Individual Medication Adherence
+            </h2>
+
+            <p>
+              Monthly dose performance
+            </p>
+          </div>
+
         </div>
 
-        {/* Summary */}
-
-        <div className="grid grid-cols-2 gap-4 border-b p-5 sm:grid-cols-4">
-          <div>
-            <p className="text-xs text-muted-foreground">
-              Recorded Doses
-            </p>
-
-            <p className="mt-1 text-2xl font-semibold">
-              {selectedDaySummary.total}
-            </p>
-          </div>
-
-          <div>
-            <p className="text-xs text-muted-foreground">
-              Taken
-            </p>
-
-            <p className="mt-1 text-2xl font-semibold">
-              {selectedDaySummary.taken}
-            </p>
-          </div>
-
-          <div>
-            <p className="text-xs text-muted-foreground">
-              Scheduled
-            </p>
-
-            <p className="mt-1 text-2xl font-semibold">
-              {selectedDaySummary.scheduled}
-            </p>
-          </div>
-
-          <div>
-            <p className="text-xs text-muted-foreground">
-              Missed
-            </p>
-
-            <p className="mt-1 text-2xl font-semibold">
-              {selectedDaySummary.missed}
-            </p>
-          </div>
-        </div>
-
-        {/* Dose Records */}
-
-        {selectedDayRecords.length === 0 &&
-        selectedDaySchedules.length === 0 ? (
-          <div className="p-8 text-center">
-            <p className="font-medium">
-              No medication activity
-            </p>
-
-            <p className="mt-1 text-sm text-muted-foreground">
-              There are no recorded doses or active
-              medication schedules for this date.
-            </p>
+        {medicationStats.length === 0 ? (
+          <div className="mm-empty">
+            No medication dose data is
+            available for this month.
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b text-left">
-                  <th className="px-5 py-3 font-medium">
-                    Patient
-                  </th>
+          <div className="mm-table-wrapper">
 
-                  <th className="px-5 py-3 font-medium">
+            <table className="mm-table">
+
+              <thead>
+                <tr>
+                  <th>
                     Medication
                   </th>
 
-                  <th className="px-5 py-3 font-medium">
+                  <th>
                     Dose
                   </th>
 
-                  <th className="px-5 py-3 font-medium">
-                    Scheduled
+                  <th>
+                    Scheduled Doses
                   </th>
 
-                  <th className="px-5 py-3 font-medium">
+                  <th>
                     Taken
                   </th>
 
-                  <th className="px-5 py-3 font-medium">
-                    Status
+                  <th>
+                    Missed
+                  </th>
+
+                  <th>
+                    Late
+                  </th>
+
+                  <th>
+                    Adherence
                   </th>
                 </tr>
               </thead>
 
               <tbody>
-                {selectedDayRecords.map(
-                  record => (
+                {medicationStats.map(
+                  (medication) => (
                     <tr
-                      key={record.id}
-                      className="border-b last:border-0"
+                      key={`${medication.name}-${medication.dose}`}
                     >
-                      <td className="px-5 py-4">
-                        <div className="font-medium">
-                          {getPatientName(
-                            record.patient_id
-                          )}
+
+                      <td>
+                        <strong>
+                          {medication.name}
+                        </strong>
+                      </td>
+
+                      <td>
+                        {medication.dose ||
+                          '—'}
+                      </td>
+
+                      <td>
+                        {medication.scheduled}
+                      </td>
+
+                      <td className="mm-positive">
+                        {medication.taken}
+                      </td>
+
+                      <td className="mm-negative">
+                        {medication.missed}
+                      </td>
+
+                      <td className="mm-warning">
+                        {medication.late}
+                      </td>
+
+                      <td>
+                        <div className="mm-adherence-cell">
+
+                          <strong>
+                            {medication.adherence}%
+                          </strong>
+
+                          <div className="mm-progress">
+                            <div
+                              className="mm-progress-fill"
+                              style={{
+                                width: `${medication.adherence}%`,
+                              }}
+                            />
+                          </div>
+
                         </div>
-
-                        <div className="text-xs text-muted-foreground">
-                          Patient #
-                          {getPatientCode(
-                            record.patient_id
-                          )}
-                        </div>
                       </td>
 
-                      <td className="px-5 py-4 font-medium">
-                        {record.medication_name}
-                      </td>
-
-                      <td className="px-5 py-4">
-                        {record.dose ?? '—'}
-                      </td>
-
-                      <td className="px-5 py-4">
-                        {new Date(
-                          record.scheduled_at
-                        ).toLocaleTimeString(
-                          [],
-                          {
-                            hour: 'numeric',
-                            minute: '2-digit',
-                          }
-                        )}
-                      </td>
-
-                      <td className="px-5 py-4">
-                        {record.taken_at
-                          ? new Date(
-                              record.taken_at
-                            ).toLocaleTimeString(
-                              [],
-                              {
-                                hour: 'numeric',
-                                minute: '2-digit',
-                              }
-                            )
-                          : '—'}
-                      </td>
-
-                      <td className="px-5 py-4">
-                        <span
-                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${statusClass(
-                            record.status
-                          )}`}
-                        >
-                          {statusLabel(
-                            record.status
-                          )}
-                        </span>
-                      </td>
                     </tr>
                   )
                 )}
-
-                {/* Scheduled medications without
-                    dose records */}
-
-                {selectedDaySchedules
-                  .filter(schedule => {
-                    return !selectedDayRecords.some(
-                      record =>
-                        record.schedule_id ===
-                        schedule.id
-                    );
-                  })
-                  .map(schedule => (
-                    <tr
-                      key={`schedule-${schedule.id}`}
-                      className="border-b last:border-0"
-                    >
-                      <td className="px-5 py-4">
-                        <div className="font-medium">
-                          {getPatientName(
-                            schedule.patient_id
-                          )}
-                        </div>
-
-                        <div className="text-xs text-muted-foreground">
-                          Patient #
-                          {getPatientCode(
-                            schedule.patient_id
-                          )}
-                        </div>
-                      </td>
-
-                      <td className="px-5 py-4 font-medium">
-                        {schedule.medication_name}
-                      </td>
-
-                      <td className="px-5 py-4">
-                        {schedule.dose}{' '}
-                        {schedule.dose_unit ?? ''}
-                      </td>
-
-                      <td className="px-5 py-4">
-                        {formatTime(
-                          schedule.scheduled_time
-                        )}
-                      </td>
-
-                      <td className="px-5 py-4">
-                        —
-                      </td>
-
-                      <td className="px-5 py-4">
-                        <span className="inline-flex rounded-full bg-blue-100 px-2.5 py-1 text-xs font-medium text-blue-700">
-                          Scheduled
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
               </tbody>
+
             </table>
+
           </div>
         )}
+
+        <div className="mm-note">
+          Individual adherence counts taken and
+          late doses as administered doses.
+          Missed doses reduce adherence.
+        </div>
+
       </div>
+
+      {/* =====================================================
+          CURRENT MEDICATION REGIMEN
+      ====================================================== */}
+
+      <div className="mm-card">
+
+        <div className="mm-section-header">
+
+          <div>
+            <h2>
+              Medication Monitoring
+            </h2>
+
+            <p>
+              Current regimen
+            </p>
+          </div>
+
+        </div>
+
+        {medications.length === 0 ? (
+          <div className="mm-empty">
+            No active medication schedules
+            found for this patient.
+          </div>
+        ) : (
+          <div className="mm-regimen">
+
+            {medications.map(
+              (medication) => (
+                <div
+                  key={medication.id}
+                  className="mm-regimen-item"
+                >
+
+                  <div className="mm-regimen-main">
+
+                    <div className="mm-regimen-icon">
+                      💊
+                    </div>
+
+                    <div>
+
+                      <h3>
+                        {medication.medication_name}{' '}
+                        {medication.dose}
+                        {medication.dose &&
+                        !/[a-zA-Z]/.test(
+                          medication.dose
+                        )
+                          ? ' mg'
+                          : ''}
+                      </h3>
+
+                      <p>
+                        Active medication schedule
+                      </p>
+
+                    </div>
+
+                  </div>
+
+                  <span className="mm-active">
+                    Active
+                  </span>
+
+                </div>
+              )
+            )}
+
+          </div>
+        )}
+
+      </div>
+
+    </div>
+  );
+}
+
+/* ============================================================
+   STAT CARD
+============================================================ */
+
+function StatCard({
+  label,
+  value,
+  type,
+}: {
+  label: string;
+  value: string | number;
+  type:
+    | 'taken'
+    | 'missed'
+    | 'late'
+    | 'adherence';
+}) {
+  return (
+    <div className={`mm-stat mm-stat-${type}`}>
+
+      <div className="mm-stat-label">
+        {label}
+      </div>
+
+      <div className="mm-stat-value">
+        {value}
+      </div>
+
     </div>
   );
 }

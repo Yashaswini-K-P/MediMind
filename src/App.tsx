@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
 import { ToastProvider } from '@/context/ToastContext';
+
 import Login from '@/pages/Login';
 
+// Patient pages
 import PatientHome from '@/pages/patient/Home';
 import PatientProfilePage from '@/pages/patient/Profile';
 import MedicationManagement from '@/pages/patient/Medications';
@@ -12,6 +14,7 @@ import SafetyReports from '@/pages/patient/SafetyReports';
 import PersonalizedGuidance from '@/pages/patient/Guidance';
 import Settings from '@/pages/patient/Settings';
 
+// Professional pages
 import ProfessionalDashboard from '@/pages/professional/Dashboard';
 import MedicationMonitoring from '@/pages/professional/MedicationMonitoring';
 import ProfessionalPatient from '@/pages/professional/Patient';
@@ -49,6 +52,7 @@ function AuthenticatedApp() {
   } = useAuth();
 
   const [view, setView] = useState<View>('home');
+
   const [selectedPatientId, setSelectedPatientId] =
     useState<string | null>(null);
 
@@ -63,6 +67,9 @@ function AuthenticatedApp() {
       )
   );
 
+  /*
+   * Theme
+   */
   useEffect(() => {
     document.body.classList.toggle('dark-theme', dark);
 
@@ -72,6 +79,9 @@ function AuthenticatedApp() {
     );
   }, [dark]);
 
+  /*
+   * Font scale
+   */
   useEffect(() => {
     document.documentElement.style.setProperty(
       '--medimind-font-scale',
@@ -84,6 +94,9 @@ function AuthenticatedApp() {
     );
   }, [fontScale]);
 
+  /*
+   * Loading
+   */
   if (loading) {
     return (
       <div className="loading-screen">
@@ -92,10 +105,16 @@ function AuthenticatedApp() {
     );
   }
 
+  /*
+   * Not authenticated
+   */
   if (!session) {
     return <Login />;
   }
 
+  /*
+   * Determine role
+   */
   const role =
     profile?.role ||
     (professionalProfile ? 'professional' : 'patient');
@@ -103,22 +122,40 @@ function AuthenticatedApp() {
   const isProfessional =
     role === 'professional' || role === 'admin';
 
+  /*
+   * Normal navigation
+   */
   const go = (next: View) => {
     setSelectedPatientId(null);
     setView(next);
   };
 
+  /*
+   * Open a specific patient from dashboard
+   */
   const openPatient = (id: string) => {
     setSelectedPatientId(id);
     setView('professional');
   };
 
+  /*
+   * Open medication monitoring
+   *
+   * This is separate from the patient clinical review.
+   */
+  const openMedicationMonitoring = () => {
+    setSelectedPatientId(null);
+    setView('professional-medications');
+  };
+
   return (
     <div className="app">
-
-      {/* SIDEBAR */}
+      {/* =====================================================
+          SIDEBAR
+      ====================================================== */}
       <aside className="sidebar">
 
+        {/* Logo */}
         <div className="sidebar-logo">
           <div className="logo">
             Medi<span>Mind</span>
@@ -129,6 +166,7 @@ function AuthenticatedApp() {
           </div>
         </div>
 
+        {/* Current user */}
         <div className="sidebar-role">
           <b>
             {isProfessional
@@ -144,10 +182,13 @@ function AuthenticatedApp() {
           </span>
         </div>
 
+        {/* =================================================
+            NAVIGATION
+        ================================================== */}
         <nav>
-
           {isProfessional ? (
             <>
+              {/* Professional Dashboard */}
               <NavItem
                 label="Professional Dashboard"
                 active={
@@ -157,18 +198,19 @@ function AuthenticatedApp() {
                 onClick={() => go('professional')}
               />
 
+              {/* Medication Monitoring */}
               <NavItem
                 label="Medication Monitoring"
                 active={
                   view === 'professional-medications'
                 }
-                onClick={() =>
-                  go('professional-medications')
-                }
+                onClick={openMedicationMonitoring}
               />
             </>
           ) : (
             <>
+              {/* Patient navigation */}
+
               <NavItem
                 label="Home"
                 active={view === 'home'}
@@ -218,21 +260,25 @@ function AuthenticatedApp() {
               />
             </>
           )}
-
         </nav>
 
+        {/* Logout */}
         <button
           className="logout"
           onClick={() => signOut()}
         >
           Sign out
         </button>
-
       </aside>
 
-      {/* MAIN */}
+      {/* =====================================================
+          MAIN CONTENT
+      ====================================================== */}
       <main className="main">
 
+        {/* =================================================
+            TOP BAR
+        ================================================== */}
         <header className="topbar">
 
           <div className="welcome">
@@ -253,13 +299,19 @@ function AuthenticatedApp() {
 
           <div className="top-actions">
 
+            {/* Theme */}
             <button
               className="secondary-btn"
-              onClick={() => setDark(v => !v)}
+              onClick={() =>
+                setDark((value) => !value)
+              }
             >
-              {dark ? 'Light theme' : 'Dark theme'}
+              {dark
+                ? 'Light theme'
+                : 'Dark theme'}
             </button>
 
+            {/* Profile */}
             <div className="profile">
 
               <div>
@@ -285,16 +337,23 @@ function AuthenticatedApp() {
               </div>
 
             </div>
-
           </div>
-
         </header>
 
-        {/* PROFESSIONAL ROUTING */}
+        {/* =================================================
+            PAGE ROUTING
+        ================================================== */}
+
         {isProfessional ? (
 
+          /*
+           * PROFESSIONAL APPLICATION
+           */
           selectedPatientId ? (
 
+            /*
+             * Individual patient clinical review
+             */
             <ProfessionalPatient
               patientId={selectedPatientId}
               onBack={() => {
@@ -305,10 +364,16 @@ function AuthenticatedApp() {
 
           ) : view === 'professional-medications' ? (
 
+            /*
+             * CALENDAR-STYLE MEDICATION MONITORING
+             */
             <MedicationMonitoring />
 
           ) : (
 
+            /*
+             * PROFESSIONAL DASHBOARD
+             */
             <ProfessionalDashboard
               onPatientOpen={openPatient}
             />
@@ -317,9 +382,14 @@ function AuthenticatedApp() {
 
         ) : (
 
+          /*
+           * PATIENT APPLICATION
+           */
           <div className="font-scaled">
 
-            {view === 'home' && <PatientHome />}
+            {view === 'home' && (
+              <PatientHome />
+            )}
 
             {view === 'profile' && (
               <PatientProfilePage />
@@ -355,14 +425,15 @@ function AuthenticatedApp() {
             )}
 
           </div>
-
         )}
-
       </main>
-
     </div>
   );
 }
+
+/* ==========================================================
+   NAV ITEM
+========================================================== */
 
 function NavItem({
   label,
@@ -375,7 +446,9 @@ function NavItem({
 }) {
   return (
     <button
-      className={`nav-item ${active ? 'active' : ''}`}
+      className={`nav-item ${
+        active ? 'active' : ''
+      }`}
       onClick={onClick}
     >
       {label}
@@ -383,27 +456,53 @@ function NavItem({
   );
 }
 
+/* ==========================================================
+   PAGE TITLE
+========================================================== */
+
 function getTitle(
   view: View,
   patientId: string | null,
   professional: boolean
 ) {
+  /*
+   * Individual patient page
+   */
   if (professional && patientId) {
     return 'Patient Clinical Review';
   }
 
+  /*
+   * Professional medication monitoring
+   */
+  if (
+    professional &&
+    view === 'professional-medications'
+  ) {
+    return 'Medication Monitoring';
+  }
+
   const titles: Record<View, string> = {
     home: 'Good day',
+
     profile: 'Patient Profile',
+
     medications: 'Medication Management',
+
     food: 'Food & Drug Interactions',
+
     prescriptions: 'Prescription History',
+
     safety: 'How You Feel',
+
     guidance:
       'Personalized Food & Administration Guidance',
+
     settings: 'Settings',
+
     professional:
       'Healthcare Professional Dashboard',
+
     'professional-medications':
       'Medication Monitoring',
   };
@@ -411,13 +510,21 @@ function getTitle(
   return titles[view];
 }
 
-function initials(name?: string | null) {
-  if (!name) return 'MM';
+/* ==========================================================
+   INITIALS
+========================================================== */
+
+function initials(
+  name?: string | null
+) {
+  if (!name) {
+    return 'MM';
+  }
 
   return name
     .split(/\s+/)
     .slice(0, 2)
-    .map(x => x[0])
+    .map((x) => x[0])
     .join('')
     .toUpperCase();
 }
